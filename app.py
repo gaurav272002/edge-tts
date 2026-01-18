@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 import edge_tts
 import io
@@ -7,26 +7,39 @@ app = FastAPI()
 
 @app.post("/tts")
 async def tts(payload: dict):
-    text = payload.get("text")
-    voice = payload.get("voice", "en-US-GuyNeural")
-    rate = payload.get("rate", "+0%")
-    pitch = payload.get("pitch", "+0%")
+    try:
+        text = payload.get("text")
+        voice = payload.get("voice", "en-US-GuyNeural")
+        rate = payload.get("rate", "+0%")
+        pitch = payload.get("pitch", "+0%")
 
-    if not text:
-        return {"error": "Text is required"}
+        if not text or not isinstance(text, str):
+            raise HTTPException(status_code=400, detail="Text is required")
 
-    communicate = edge_tts.Communicate(
-        text=text,
-        voice=voice,
-        rate=rate,
-        pitch=pitch
-    )
+        # Safety: limit extremely long payloads (Edge TTS is flaky beyond this)
+        if len(text) > 6000:
+            raise HTTPException(status_code=400, detail="Text too long")
 
-    audio_stream = io.BytesIO()
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=voice,
+            rate=rate,
+            pitch=pitch
+        )
 
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_stream.write(chunk["data"])
+        audio_stream = io.BytesIO()
 
-    audio_stream.seek(0)
-    return StreamingResponse(audio_stream, media_type="audio/mpeg")
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_stream.write(chunk["data"])
+
+        audio_stream.seek(0)
+
+        return StreamingResponse(
+            audio_stream,
+            media_type="audio/mpeg"
+        )
+
+    except Exception as e:
+        print("TTS ERROR:", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
